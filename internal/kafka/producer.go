@@ -3,22 +3,18 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
-	"wb-l0/internal/models"
+	"wb-L0/internal/models"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/sirupsen/logrus"
 )
 
-type Config struct {
-	Brokers []string `env:"KAFKA_BROKERS,required"`
-	Topic   string   `env:"KAFKA_TOPIC,required"`
-	GroupID string   `env:"KAFKA_GROUPID,required"`
-}
-
 type Producer struct {
-	writer *kafka.Writer
-	topic  string
+	writer  *kafka.Writer
+	topic   string
+	timeout time.Duration
 }
 
 func NewProducer(config Config) (*Producer, error) {
@@ -32,39 +28,45 @@ func NewProducer(config Config) (*Producer, error) {
 		}),
 		RequiredAcks: int(kafka.RequireAll),
 	})
-	return &Producer{writer: writer, topic: config.Topic}, nil
+	to := 5 * time.Second
+	if config.Timeout > 0 {
+		to = time.Duration(config.Timeout) * time.Second
+	}
+	return &Producer{writer: writer, topic: config.Topic, timeout: to}, nil
 }
 
 func (p *Producer) Close() error {
 	if p.writer != nil {
 		err := p.writer.Close()
-		if err != nil {
-			logrus.Errorf("ошибка при закрытии продюсера: %v", err)
-			return err
-		}
-		logrus.Infof("продюсер для топика %s успешно закрыт", p.topic)
+		p.writer = nil
+		return err
 	}
 	return nil
 }
 
-func (p *Producer) SendMsg(ctx context.Context, order models.Order) error {
-	data_value, err := json.Marshal(order)
+func (p *Producer) SendMsg(ctx context.Context, order *models.Order) error {
+	if p.writer == nil {
+		return fmt.Errorf("writer is nil")
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	value, err := json.Marshal(order)
 	if err != nil {
-		logrus.Errorf("не удалось сериализовать заказ %s: %v", order.OrderUID, err)
+		logrus.WithError(err).Error("marshal order error")
 		return err
 	}
 	msg := kafka.Message{
 		Key:   []byte(order.OrderUID),
-		Value: data_value,
+		Value: value,
 		Time:  time.Now(),
 	}
-	SMcontext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	if err := p.writer.WriteMessages(SMcontext, msg); err != nil {
-		logrus.Errorf("не удалось отправить сообщение в продьюсере %s: %v", order.OrderUID, err)
+	if err := p.writer.WriteMessages(ctxTimeout, msg); err != nil {
+		logrus.WithError(err).Error("send message error")
 		return err
 	}
-	logrus.Infof("сообщение %s было отправлено в кафку", order.OrderUID)
+	logrus.WithField("order_uid", order.OrderUID).Info("message sent to kafka")
 	return nil
-
 }
