@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"wb-L0/internal/kafka"
@@ -17,54 +18,36 @@ func main() {
 
 	var cfg kafka.Config
 	if err := env.Parse(&cfg); err != nil {
-		logrus.WithError(err).Fatal("не удалось загрузить конфиг")
+		logrus.WithError(err).Fatal("failed to load config")
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 5
 	}
 
 	producer, err := kafka.NewProducer(cfg)
 	if err != nil {
-		logrus.WithError(err).Fatal("не удалось создать Kafka producer")
+		logrus.WithError(err).Fatal("failed to create producer")
 	}
 	defer producer.Close()
 
-	// Тестовые данные
-	order := models.Order{
-		OrderUID:    "test-123",
-		TrackNumber: "TRACK-001",
-		Locale:      "en",
-		DateCreated: time.Now().UTC(),
-	}
-
-	// Отправляем сообщение с таймаутом
 	ctx := context.Background()
-	if err := producer.SendMsg(ctx, order); err != nil {
-		logrus.WithError(err).Error("ошибка при отправке сообщения")
-	} else {
-		logrus.WithField("order_uid", order.OrderUID).Info("сообщение успешно отправлено")
+	for i := 1; i <= 5; i++ {
+		order := &models.Order{
+			OrderUID:    fmt.Sprintf("order-%d", i),
+			TrackNumber: fmt.Sprintf("TRACK%d", i),
+			Entry:       "WBIL",
+			Delivery:    models.Delivery{Name: "Test User", Phone: "+1234567890"},
+			Payment:     models.Payment{Transaction: fmt.Sprintf("tx-%d", i), Amount: 100 + i},
+			Items:       models.Items{{Name: fmt.Sprintf("Item %d", i), Price: 100 + i}},
+			Locale:      "en",
+			DateCreated: time.Now(),
+		}
+		if err := producer.SendMsg(ctx, order); err != nil {
+			logrus.WithError(err).Errorf("failed to send message #%d", i)
+		} else {
+			logrus.Infof("Message #%d sent", i)
+		}
+		time.Sleep(1 * time.Second)
 	}
-	// producer, err := kafka.NewProducer(cfg)
-	// if err != nil {
-	// 	logrus.WithError(err).Fatal("не удалось создать Kafka producer")
-	// }
-	// defer producer.Close()
-
-	// ctx := context.Background()
-	// time.Sleep(10 * time.Second)
-	// for i := 1; i <= 5; i++ { // отправляем 5 сообщений
-	// 	order := models.Order{
-	// 		OrderUID:    fmt.Sprintf("test-%d", i),
-	// 		TrackNumber: fmt.Sprintf("TRACK-%03d", i),
-	// 		Locale:      "en",
-	// 		DateCreated: time.Now().UTC(),
-	// 	}
-
-	// 	if err := producer.SendMsg(ctx, order); err != nil {
-	// 		logrus.WithError(err).Error("ошибка при отправке сообщения")
-	// 	} else {
-	// 		logrus.WithField("order_uid", order.OrderUID).Info("сообщение успешно отправлено")
-	// 	}
-
-	// 	time.Sleep(2 * time.Second) // пауза между сообщениями
-	// }
-
-	// logrus.Info("Все сообщения отправлены")
+	logrus.Info("All messages sent, producer exiting")
 }
